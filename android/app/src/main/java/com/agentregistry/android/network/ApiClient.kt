@@ -90,6 +90,7 @@ class ApiClient(var baseUrl: String = "http://10.0.2.2:8080") {
         val requestBody = body.toRequestBody(jsonMediaType)
         val request = Request.Builder().url("$baseUrl$path").post(requestBody).build()
         client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw Exception("HTTP ${response.code}: ${response.message}")
             return response.body?.string() ?: ""
         }
     }

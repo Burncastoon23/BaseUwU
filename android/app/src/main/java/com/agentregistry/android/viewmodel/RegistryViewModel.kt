@@ -14,6 +14,7 @@ data class RegistryUiState(
     val serverUrl: String = "http://10.0.2.2:8080",
     val agentCount: Int = 0,
     val staleCount: Int = 0,
+    val searchQuery: String = "",
 )
 
 class RegistryViewModel : ViewModel() {

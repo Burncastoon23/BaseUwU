@@ -50,8 +50,8 @@ class AgentDetailActivity : AppCompatActivity() {
                     binding.tvDescription.text = card.description
 
                     val trustColor = when (card.trustLevel) {
-                        "VRF" -> 0xFF4CAF50.toInt()
-                        "DCL" -> 0xFF2196F3.toInt()
+                        "verified" -> 0xFF4CAF50.toInt()
+                        "self_declared" -> 0xFF2196F3.toInt()
                         else -> 0xFF9E9E9E.toInt()
                     }
                     binding.tvTrustBadge.text = card.trustLevel
