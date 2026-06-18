@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Trust tier colors -->
+    <color name="color_tier_vrf">#43A047</color>
+    <color name="color_tier_dcl">#FB8C00</color>
+    <color name="color_tier_unk">#E53935</color>
+
+    <!-- Status colors -->
+    <color name="color_active">#1976D2</color>
+    <color name="color_inactive">#9E9E9E</color>
+
+    <!-- SKU code color -->
+    <color name="color_sku_code">#6200EE</color>
+
+    <!-- Theme support colors -->
+    <color name="color_primary_container">#BBDEFB</color>
+    <color name="color_on_primary_container">#0D47A1</color>
+    <color name="color_secondary_container">#C8E6C9</color>
+    <color name="color_on_secondary_container">#1B5E20</color>
+</resources>

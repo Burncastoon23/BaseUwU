@@ -21,6 +21,7 @@ from agents.examples import CODE_AGENT, FINANCE_AGENT, SEARCH_AGENT
 from api.routes import match_route
 from registry.renderer import render_card_html
 from registry.schema import AgentCard, TrustLevel
+from registry.sku import SKURegistry, generate_sku
 from verifier.scheduler import VerificationScheduler
 from verifier.suite import VerificationSuite
 
@@ -31,6 +32,7 @@ from verifier.suite import VerificationSuite
 _registry: dict[str, AgentCard] = {}
 _scheduler: VerificationScheduler | None = None
 _registry_lock = threading.Lock()
+_sku_registry = SKURegistry()
 
 
 def _init_state() -> None:
@@ -39,6 +41,7 @@ def _init_state() -> None:
     with _registry_lock:
         for card in (CODE_AGENT, SEARCH_AGENT, FINANCE_AGENT):
             _registry[card.agent_id] = card
+            _sku_registry.register(card)
     suite = VerificationSuite()
     _scheduler = VerificationScheduler(suite=suite, registry=_registry)
 
@@ -173,6 +176,7 @@ def _handle_register_agent(handler: "AgentRegistryHandler", params: dict, qs: di
         _registry[card.agent_id] = card
         if _scheduler is not None:
             _scheduler.add_agent(card)
+        _sku_registry.register(card)
     status = 200 if already_exists else 201
     _json_response(handler, status, card.to_dict())
 
@@ -181,6 +185,8 @@ def _handle_delete_agent(handler: "AgentRegistryHandler", params: dict, qs: dict
     agent_id = params["id"]
     with _registry_lock:
         card = _registry.pop(agent_id, None)
+        if card is not None:
+            _sku_registry.deactivate(agent_id)
     if card is None:
         _error(handler, 404, f"Agent '{agent_id}' not found")
         return
@@ -296,6 +302,9 @@ def _handle_merge_agents(handler: "AgentRegistryHandler", params: dict, qs: dict
             trust_level=TrustLevel.UNVERIFIED,
         )
         _registry[new_id] = merged_card
+        _sku_registry.register(merged_card)
+        merged_sku_code = _sku_registry.get_by_agent(new_id)
+        merged_sku_str = merged_sku_code.sku_code if merged_sku_code else None
 
         # Mark sources as MERGED by setting a special trust level value
         # We use a sentinel description tag since TrustLevel enum is fixed.
@@ -307,12 +316,83 @@ def _handle_merge_agents(handler: "AgentRegistryHandler", params: dict, qs: dict
             # Remove from active registry so they don't appear in normal listing
             # but keep a copy with the merged tag by re-storing
             _registry[sid] = src
+            _sku_registry.deactivate(sid, superseded_by_sku=merged_sku_str)
 
     _json_response(handler, 201, {
         "merged_id": new_id,
         "source_ids": source_ids,
         "card": merged_card.to_dict(),
     })
+
+
+# ---------------------------------------------------------------------------
+# SKU route handlers
+# ---------------------------------------------------------------------------
+
+def _handle_list_skus(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    skus = _sku_registry.list_active()
+    _json_response(handler, 200, [s.to_dict() for s in skus])
+
+
+def _handle_get_sku(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    sku_code = params["sku_code"]
+    sku = _sku_registry.get_by_sku(sku_code)
+    if sku is None:
+        _error(handler, 404, f"SKU '{sku_code}' not found")
+        return
+    _json_response(handler, 200, sku.to_dict())
+
+
+def _handle_get_sku_agent(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    sku_code = params["sku_code"]
+    sku = _sku_registry.get_by_sku(sku_code)
+    if sku is None:
+        _error(handler, 404, f"SKU '{sku_code}' not found")
+        return
+    with _registry_lock:
+        card = _registry.get(sku.agent_id)
+    if card is None:
+        _error(handler, 404, f"Agent '{sku.agent_id}' not found in registry")
+        return
+    _json_response(handler, 200, card.to_dict())
+
+
+def _handle_search_skus(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    query = qs.get("q", [""])[0]
+    category = qs.get("category", [""])[0]
+    tier = qs.get("tier", [""])[0]
+    results = _sku_registry.search(query=query, category=category, tier=tier, active_only=True)
+    _json_response(handler, 200, [s.to_dict() for s in results])
+
+
+def _handle_sku_catalog(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    _json_response(handler, 200, _sku_registry.to_catalog())
+
+
+def _handle_sku_sync(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    """Rebuild entire SKU registry from current agents."""
+    with _registry_lock:
+        cards = list(_registry.values())
+    count = 0
+    for card in cards:
+        _sku_registry.register(card)
+        count += 1
+    _json_response(handler, 200, {
+        "status": "synced",
+        "agent_count": count,
+        "sku_count": len(_sku_registry.list_all()),
+    })
+
+
+def _handle_deactivate_sku(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
+    sku_code = params["sku_code"]
+    sku = _sku_registry.get_by_sku(sku_code)
+    if sku is None:
+        _error(handler, 404, f"SKU '{sku_code}' not found")
+        return
+    _sku_registry.deactivate(sku.agent_id)
+    updated = _sku_registry.get_by_sku(sku_code)
+    _json_response(handler, 200, updated.to_dict() if updated else {"deactivated": sku_code})
 
 
 def _handle_health(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
@@ -331,17 +411,25 @@ def _handle_health(handler: "AgentRegistryHandler", params: dict, qs: dict) -> N
 # ---------------------------------------------------------------------------
 
 ROUTES: dict[str, Any] = {
-    "GET /health":                    _handle_health,
-    "GET /agents":                    _handle_list_agents,
-    "GET /agents/obsolete":           _handle_list_obsolete,
-    "POST /agents":                   _handle_register_agent,
-    "POST /agents/consolidate":       _handle_consolidate,
-    "POST /agents/refresh":           _handle_refresh,
-    "POST /agents/merge":             _handle_merge_agents,
-    "GET /agents/{id}":               _handle_get_agent,
-    "GET /agents/{id}/card.html":     _handle_get_agent_html,
-    "DELETE /agents/{id}":            _handle_delete_agent,
-    "POST /agents/{id}/verify":       _handle_verify_agent,
+    "GET /health":                            _handle_health,
+    "GET /agents":                            _handle_list_agents,
+    "GET /agents/obsolete":                   _handle_list_obsolete,
+    "POST /agents":                           _handle_register_agent,
+    "POST /agents/consolidate":               _handle_consolidate,
+    "POST /agents/refresh":                   _handle_refresh,
+    "POST /agents/merge":                     _handle_merge_agents,
+    "GET /agents/{id}":                       _handle_get_agent,
+    "GET /agents/{id}/card.html":             _handle_get_agent_html,
+    "DELETE /agents/{id}":                    _handle_delete_agent,
+    "POST /agents/{id}/verify":               _handle_verify_agent,
+    # SKU routes
+    "GET /sku":                               _handle_list_skus,
+    "GET /sku/search":                        _handle_search_skus,
+    "GET /sku/catalog":                       _handle_sku_catalog,
+    "POST /sku/sync":                         _handle_sku_sync,
+    "GET /sku/{sku_code}":                    _handle_get_sku,
+    "GET /sku/{sku_code}/agent":              _handle_get_sku_agent,
+    "DELETE /sku/{sku_code}":                 _handle_deactivate_sku,
 }
 
 
