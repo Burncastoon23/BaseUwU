@@ -22,15 +22,14 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from agents import CODE_AGENT, SEARCH_AGENT, FINANCE_AGENT
+from agents import CODE_AGENT, FINANCE_AGENT, SEARCH_AGENT
 from registry.renderer import (
-    render_card_text,
     render_card_html,
+    render_card_text,
     render_registry_index,
 )
 from registry.schema import AgentCard
 from verifier.probe import MockProbe
-
 
 # ---------------------------------------------------------------------------
 # In-memory registry
@@ -202,7 +201,7 @@ def cmd_keygen(level: str = "admin") -> None:
     from api.auth import generate_key
     key = generate_key()
     print(f"{level}:{key}")
-    print(f"\n# Add to the server environment:", file=sys.stderr)
+    print("\n# Add to the server environment:", file=sys.stderr)
     print(f"export REGISTRY_API_KEYS=\"{level}:{key}\"", file=sys.stderr)
 
 

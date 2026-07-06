@@ -2,10 +2,10 @@
 Tracks which agents have been marked obsolete and why.
 Persists state to JSON so the registry survives restarts.
 """
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
-import json
 
 
 @dataclass

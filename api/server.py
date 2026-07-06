@@ -9,7 +9,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import os
 import threading
@@ -24,7 +23,7 @@ from api.routes import match_route
 from registry.obsolescence import ObsolescenceTracker
 from registry.renderer import render_card_html
 from registry.schema import AgentCard, TrustLevel
-from registry.sku import SKURegistry, generate_sku
+from registry.sku import SKURegistry
 from registry.store import SQLiteStore
 from verifier.scheduler import VerificationScheduler
 from verifier.suite import VerificationSuite

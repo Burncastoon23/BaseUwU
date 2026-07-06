@@ -22,8 +22,8 @@ from verifier.probe import (
     HttpProbe,
     MockProbe,
 )
-from verifier.suite import VerificationSuite
 from verifier.scheduler import VerificationScheduler
+from verifier.suite import VerificationSuite
 
 __all__ = [
     "CapabilityProbe",

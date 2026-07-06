@@ -3,7 +3,8 @@ Example AgentCard instances representing realistic agents.
 """
 
 from datetime import datetime, timezone
-from registry.schema import AgentCard, AgentCapability, TrustLevel
+
+from registry.schema import AgentCapability, AgentCard, TrustLevel
 
 _VERIFICATION_DATE = datetime(2026, 6, 15, tzinfo=timezone.utc)
 _TTL = 86400

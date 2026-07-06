@@ -10,13 +10,12 @@ codes stay stable across re-verification so external references never break.
 Legacy 4-part codes ({CAT}-{SUB}-{TIER}-{HASH}) are kept as aliases and
 resolve to the current code.
 """
+import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
-import hashlib
-import json
-import re
 
 
 class SkuCategory(Enum):

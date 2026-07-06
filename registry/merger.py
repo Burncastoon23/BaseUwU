@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from registry.schema import AgentCard, AgentCapability, TrustLevel
-
+from registry.schema import AgentCapability, AgentCard, TrustLevel
 
 # ---------------------------------------------------------------------------
 # Trust level ordering (conservative = lower value wins)

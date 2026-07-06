@@ -17,7 +17,6 @@ from typing import Any, Optional
 
 from registry.schema import AgentCard, VerificationResult
 
-
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------

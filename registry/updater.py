@@ -5,13 +5,12 @@ and flags candidates for consolidation/removal.
 import asyncio
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
 from typing import Callable, Optional
+
 from registry.schema import AgentCard, TrustLevel
 from verifier.scheduler import VerificationScheduler
-from verifier.suite import VerificationSuite
-from verifier.probe import MockProbe
 
 # Ordering of TrustLevel values for comparison (higher index = higher trust)
 _TRUST_ORDER = [

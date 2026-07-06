@@ -13,8 +13,7 @@ import html as html_lib
 from datetime import datetime, timezone
 from typing import Optional
 
-from .schema import AgentCard, AgentCapability, TrustLevel
-
+from .schema import AgentCard, TrustLevel
 
 # ---------------------------------------------------------------------------
 # Helpers
