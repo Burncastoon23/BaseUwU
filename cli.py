@@ -11,6 +11,7 @@ Commands:
   drift <agent_id>        Show drift report for an agent
   ingest-mcp <json_file>  Parse MCP manifest JSON file -> register agent
   ingest-a2a <json_file>  Parse A2A Agent Card JSON file -> register agent
+  keygen [read|admin]     Generate an API key (default: admin)
   help                    Show this help
 """
 
@@ -196,6 +197,15 @@ def cmd_ingest_a2a(json_file: str) -> None:
     print(render_card_text(card))
 
 
+def cmd_keygen(level: str = "admin") -> None:
+    """Generate an API key and print the env-var line to configure it."""
+    from api.auth import generate_key
+    key = generate_key()
+    print(f"{level}:{key}")
+    print(f"\n# Add to the server environment:", file=sys.stderr)
+    print(f"export REGISTRY_API_KEYS=\"{level}:{key}\"", file=sys.stderr)
+
+
 def cmd_help() -> None:
     print(__doc__)
 
@@ -250,6 +260,13 @@ def main() -> None:
             print("Error: 'ingest-a2a' requires a <json_file> argument.", file=sys.stderr)
             sys.exit(1)
         cmd_ingest_a2a(args[1])
+
+    elif command == "keygen":
+        level = args[1] if len(args) > 1 else "admin"
+        if level not in ("read", "admin"):
+            print("Error: level must be 'read' or 'admin'.", file=sys.stderr)
+            sys.exit(1)
+        cmd_keygen(level)
 
     else:
         print(f"Error: unknown command '{command}'.", file=sys.stderr)

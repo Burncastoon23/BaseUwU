@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from agents.examples import CODE_AGENT, FINANCE_AGENT, SEARCH_AGENT
+from api.auth import ApiKeyAuth
 from api.routes import match_route
 from registry.obsolescence import ObsolescenceTracker
 from registry.renderer import render_card_html
@@ -38,12 +39,28 @@ _registry_lock = threading.Lock()
 _sku_registry = SKURegistry()
 _store: SQLiteStore | None = None
 _obsolescence: ObsolescenceTracker | None = None
+_auth = ApiKeyAuth()
+
+MAX_BODY_BYTES = 1024 * 1024  # 1 MiB
+
+
+def _cors_origin(request_origin: str | None) -> str | None:
+    """Resolve the Access-Control-Allow-Origin value from the configured
+    allowlist (REGISTRY_CORS_ORIGINS, comma-separated; default '*')."""
+    allowed = os.environ.get("REGISTRY_CORS_ORIGINS", "*")
+    if allowed == "*":
+        return "*"
+    origins = {o.strip() for o in allowed.split(",") if o.strip()}
+    if request_origin and request_origin in origins:
+        return request_origin
+    return None
 
 
 def _init_state(db_path: str | None = None) -> None:
     """Load state from the SQLite store; seed the three example agents only
     when the database is empty (first boot)."""
-    global _registry, _scheduler, _store, _obsolescence
+    global _registry, _scheduler, _store, _obsolescence, _auth
+    _auth = ApiKeyAuth()
     _store = SQLiteStore(db_path)
     obs_path = os.path.join(os.path.dirname(_store.path) or ".", "obsolescence.json")
     _obsolescence = ObsolescenceTracker(persist_path=obs_path)
@@ -140,7 +157,9 @@ def _json_response(handler: "AgentRegistryHandler", status: int, data: Any) -> N
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    origin = _cors_origin(handler.headers.get("Origin"))
+    if origin:
+        handler.send_header("Access-Control-Allow-Origin", origin)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -150,7 +169,9 @@ def _html_response(handler: "AgentRegistryHandler", status: int, html: str) -> N
     handler.send_response(status)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
+    origin = _cors_origin(handler.headers.get("Origin"))
+    if origin:
+        handler.send_header("Access-Control-Allow-Origin", origin)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -163,6 +184,9 @@ def _read_json_body(handler: "AgentRegistryHandler") -> dict[str, Any] | None:
     length = int(handler.headers.get("Content-Length", 0))
     if length == 0:
         return {}
+    if length > MAX_BODY_BYTES:
+        _error(handler, 413, f"Body too large (max {MAX_BODY_BYTES} bytes)")
+        return None
     raw = handler.rfile.read(length)
     try:
         return json.loads(raw)
@@ -520,6 +544,11 @@ class AgentRegistryHandler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = parse_qs(parsed.query)
 
+        allowed, status, msg = _auth.check(method, self.headers.get("X-API-Key"))
+        if not allowed:
+            _error(self, status, msg)
+            return
+
         try:
             handler_fn, params = match_route(method, path, ROUTES)
         except KeyError:
@@ -545,9 +574,11 @@ class AgentRegistryHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         """CORS preflight."""
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = _cors_origin(self.headers.get("Origin"))
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
         self.end_headers()
 
 
@@ -555,7 +586,7 @@ class AgentRegistryHandler(BaseHTTPRequestHandler):
 # Server entry point
 # ---------------------------------------------------------------------------
 
-def run_server(port: int = 8080, host: str = "0.0.0.0", db_path: str | None = None) -> None:
+def run_server(port: int = 8080, host: str = "127.0.0.1", db_path: str | None = None) -> None:
     """Initialise state and start a threaded HTTP server on *host*:*port*."""
     import logging
     logging.basicConfig(
