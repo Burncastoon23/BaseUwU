@@ -1,0 +1,24 @@
+{
+  "name": "DataAnalysis Agent",
+  "version": "2.1.0",
+  "description": "Analyzes structured data and produces insights",
+  "url": "http://data-agent.example.com/api",
+  "skills": [
+    {
+      "id": "analyze_csv",
+      "name": "Analyze CSV",
+      "description": "Parse and analyze CSV files",
+      "inputModes": ["text", "file"],
+      "outputModes": ["text", "json"]
+    },
+    {
+      "id": "plot_chart",
+      "name": "Plot Chart",
+      "description": "Generate charts from data",
+      "inputModes": ["json"],
+      "outputModes": ["image"]
+    }
+  ],
+  "capabilities": {"streaming": true, "pushNotifications": false},
+  "authentication": {"schemes": ["Bearer"]}
+}

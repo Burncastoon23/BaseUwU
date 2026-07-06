@@ -1,96 +1,87 @@
-<img alt="BaseUwU logo" src="docs/logo.svg" width="100%"/>
+# Agent Registry
 
-# BaseUwU Binary to Text Encoding
+Registre de capacités d'agents IA — cartes lisibles par l'humain **et** par la machine, catalogue SKU, vérification continue, API REST et client Android.
 
-BaseUwU is a **THICCCC** binary to text encowoding using only `UwU`s and `OwO`s for maxium communication clarity among furries and weebs.
+> L'ancienne bibliothèque C « BaseUwU » (encodage binaire→texte) vit désormais dans [`legacy/`](legacy/).
 
-It's extremely inefficent &mdash; **THICCCC** with four C's, that is &mdash; at 24 output bytes per input byte. It's the perfect fit for projects which require maxium inefficiency!
+## Composants
 
-## Usage
+| Répertoire | Rôle |
+|---|---|
+| `registry/` | Modèles (AgentCard, capacités, TrustLevel), SKU, consolidation, fusion, persistance SQLite |
+| `verifier/` | Probes de vérification, suite d'évaluation continue, scheduler TTL |
+| `api/` | Serveur REST (stdlib, zéro dépendance), auth par clé API |
+| `agents/` | Agents d'exemple |
+| `android/` | Client Android (Kotlin, OkHttp, Material3) |
+| `tests/` | Suite `unittest` |
+| `cli.py` | CLI : list, show, verify, drift, ingest-mcp, ingest-a2a, keygen |
 
-This is a single header C library, in the style of an STB library. It does not need support for any C standard library functions if you provide a custom `malloc`-compatible function; otherwise, it only requires that `malloc` is available.
+## Démarrage rapide
 
-### Including
+```bash
+# Serveur (aucune dépendance à installer, Python ≥ 3.11)
+python api/start.py --port 8080
+# État persisté dans data/registry.db (configurable: --db ou $REGISTRY_DB)
 
-To include the library implementation, define `BASE_UWU_IMPLEMENTATION` before `#include`ing the file:
-
-```c
-#define BASE_UWU_IMPLEMENTATION
-#include "baseuwu.h"
+curl localhost:8080/health
+curl localhost:8080/agents
+curl localhost:8080/sku
 ```
 
-Otherwise, just include `baseuwu.h`.
+### Docker
 
-To specify a custom memory allocation function, define `BASE_UWU_ALLOC(x)` before including the implementation:
-
-```c
-#define BASE_UWU_IMPLEMENTATION
-#define BASE_UWU_ALLOC(x) MyCustomAlloc(x)
-#include "baseuwu.h"
+```bash
+docker build -t agent-registry .
+docker run -p 8080:8080 -v registry-data:/data agent-registry
 ```
 
-The default `malloc` is used if one is not specified.
+### Sécurité
 
-### Encoding
+Sans clé configurée, l'API démarre en mode ouvert (warning au boot). En production :
 
-To encode, use `UwU_Encode`:
-
-```c
-// Declaration for UwU_Encode
-int UwU_Encode(size_t input_size, const uint8_t *input_data, char **output_data_pointer);
-
-void something() {
-	char data[] = "Hello, world!";
-	char *output; // The pointer to the resulting data is stored here.
-	
-	// Encode the binary data
-	int status = UwU_Encode(strlen(data) + 1, data, output);
-	
-	if (status) {
-		// Handle error...
-	}
-	
-	printf("Output: %s\n", output);
-	
-	free(output);
-}
+```bash
+python cli.py keygen admin           # génère une clé
+export REGISTRY_API_KEYS="admin:<clé>"
+python api/start.py --host 0.0.0.0
 ```
 
-### Decoding
+Les GET restent publics (sauf `REGISTRY_REQUIRE_READ_KEY=1`) ; POST/DELETE exigent une clé admin via l'en-tête `X-API-Key`. CORS configurable par `REGISTRY_CORS_ORIGINS`.
 
-To decode data, use `UwU_Decode`:
+## SKU
 
-```c
-// Declaration for UwU_Decode
-int UwU_Decode(const char *input_data, size_t *output_size_ptr, const uint8_t **output_data_ptr);
+Chaque agent reçoit un code stable `{CATÉGORIE}-{SOUS-CAT}-{HASH}` (ex. `CODE-WRITE_CO-61a7`). Le niveau de confiance (VRF/DCL/UNK) est un attribut **mutable** — la re-vérification ne change jamais le code. Les anciens codes (format historique à 4 segments) restent résolubles via des alias (`resolved_from` dans la réponse).
 
-void something() {
-	char data[] = "OwOUwUOwOOwOUwUOwOOwOOwOOwOUwUUwUOwOOwOUwUOwOUwUOwOUwUUwUUwUOwOUwUUwUUwUOwOUwUUwUUwUOwOUwUUwUUwUOwOUwUUwUOwOUwUUwUUwUUwUOwOOwOUwUOwOOwOOwOOwOUwUOwOOwOUwUOwOOwOOwOOwOOwOOwOOwOUwUUwUUwUOwOUwUOwOOwOOwOUwUUwUOwOOwOUwUUwUOwOOwOOwOOwOOwOOwOOwOOwO";
-	size_t output_size; // The size of the loaded data is stored here
-	char *output_data; // The pointer to the loaded data is stored here
-	
-	// Decode the text data
-	int status = UwU_Decode(data, &output_size, &output_data);
-	
-	if (status) {
-		// Handle error ...
-	}
-	
-	// NOTE: This assumes that the NUL byte was kept at the end of the encoded data.
-	printf("Decoded: %s (length = %x)\n", output_data, output_size);
-	
-	free(output_data);
-}
+## API
+
+```
+GET    /health                        état + compteurs
+GET    /agents                        liste des agents
+POST   /agents                        enregistrer un agent (admin)
+DELETE /agents/{id}                   supprimer (admin)
+GET    /agents/obsolete               candidats à suppression
+POST   /agents/consolidate?dry_run=   passe de consolidation (admin)
+POST   /agents/refresh                re-vérification async (admin)
+POST   /agents/merge                  fusion N→1 (admin)
+POST   /agents/{id}/verify            probes + mise à jour trust (admin)
+GET    /sku                           catalogue actif
+GET    /sku/{code}                    détail (suit les alias)
+GET    /sku/{code}/agent              AgentCard via SKU
+GET    /sku/search?q=&category=&tier=
+GET    /sku/catalog                   catalogue complet + meta
+POST   /sku/sync                      resynchronisation (admin)
+DELETE /sku/{code}                    désactivation (admin)
 ```
 
-## Contributing
+## Tests
 
-Don't. Or do. I don't care, really.
+```bash
+python -m unittest discover -s tests
+```
 
-## Code quality
+## Android
 
-¯\\\_(ツ)\_/¯
+```bash
+cd android && ./gradlew assembleDebug
+```
 
-## Licence
-
-No.
+L'URL du serveur et la clé API se configurent dans l'écran Settings de l'app.
