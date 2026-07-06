@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,9 +20,11 @@ from urllib.parse import parse_qs, urlparse
 
 from agents.examples import CODE_AGENT, FINANCE_AGENT, SEARCH_AGENT
 from api.routes import match_route
+from registry.obsolescence import ObsolescenceTracker
 from registry.renderer import render_card_html
 from registry.schema import AgentCard, TrustLevel
 from registry.sku import SKURegistry, generate_sku
+from registry.store import SQLiteStore
 from verifier.scheduler import VerificationScheduler
 from verifier.suite import VerificationSuite
 
@@ -33,17 +36,44 @@ _registry: dict[str, AgentCard] = {}
 _scheduler: VerificationScheduler | None = None
 _registry_lock = threading.Lock()
 _sku_registry = SKURegistry()
+_store: SQLiteStore | None = None
+_obsolescence: ObsolescenceTracker | None = None
 
 
-def _init_state() -> None:
-    """Populate registry with the three example agents and create scheduler."""
-    global _registry, _scheduler
+def _init_state(db_path: str | None = None) -> None:
+    """Load state from the SQLite store; seed the three example agents only
+    when the database is empty (first boot)."""
+    global _registry, _scheduler, _store, _obsolescence
+    _store = SQLiteStore(db_path)
+    obs_path = os.path.join(os.path.dirname(_store.path) or ".", "obsolescence.json")
+    _obsolescence = ObsolescenceTracker(persist_path=obs_path)
+
     with _registry_lock:
-        for card in (CODE_AGENT, SEARCH_AGENT, FINANCE_AGENT):
-            _registry[card.agent_id] = card
-            _sku_registry.register(card)
+        _registry.clear()
+        if _store.is_empty():
+            for card in (CODE_AGENT, SEARCH_AGENT, FINANCE_AGENT):
+                _registry[card.agent_id] = card
+                sku = _sku_registry.register(card)
+                _store.save_agent(card)
+                _store.save_sku(sku)
+        else:
+            _registry.update(_store.load_agents())
+            _sku_registry.load_state(_store.load_skus(), _store.load_aliases())
     suite = VerificationSuite()
     _scheduler = VerificationScheduler(suite=suite, registry=_registry)
+
+
+def _persist_agent_sku(agent_id: str) -> None:
+    """Write-through: persist an agent's SKU and the current alias table.
+    Caller must NOT hold _registry_lock requirements — store has its own lock."""
+    if _store is None:
+        return
+    sku = _sku_registry.get_by_agent(agent_id)
+    if sku is not None:
+        _store.save_sku(sku)
+    for alias, target in _sku_registry.aliases().items():
+        _store.save_alias(alias, target)
+        _store.delete_sku(alias)  # aliased codes are no longer live rows
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +108,19 @@ def _run_consolidation(dry_run: bool = False) -> dict[str, Any]:
         if not dry_run:
             for aid in obsolete_ids:
                 del _registry[aid]
+                _sku_registry.deactivate(aid)
                 removed.append(aid)
+
+    if _obsolescence is not None:
+        for aid in obsolete_ids:
+            if not _obsolescence.is_flagged(aid):
+                _obsolescence.flag(aid, reason="STALE", notes="flagged by consolidation pass")
+        for aid in removed:
+            _obsolescence.confirm_removal(aid)
+    for aid in removed:
+        if _store is not None:
+            _store.delete_agent(aid)
+        _persist_agent_sku(aid)
 
     return {
         "dry_run": dry_run,
@@ -177,6 +219,9 @@ def _handle_register_agent(handler: "AgentRegistryHandler", params: dict, qs: di
         if _scheduler is not None:
             _scheduler.add_agent(card)
         _sku_registry.register(card)
+    if _store is not None:
+        _store.save_agent(card)
+    _persist_agent_sku(card.agent_id)
     status = 200 if already_exists else 201
     _json_response(handler, status, card.to_dict())
 
@@ -190,6 +235,9 @@ def _handle_delete_agent(handler: "AgentRegistryHandler", params: dict, qs: dict
     if card is None:
         _error(handler, 404, f"Agent '{agent_id}' not found")
         return
+    if _store is not None:
+        _store.delete_agent(agent_id)
+    _persist_agent_sku(agent_id)
     _json_response(handler, 200, {"deleted": agent_id})
 
 
@@ -237,6 +285,13 @@ def _handle_verify_agent(handler: "AgentRegistryHandler", params: dict, qs: dict
     updated = _scheduler.suite.update_card_trust(card, results)
     with _registry_lock:
         _registry[updated.agent_id] = updated
+        _sku_registry.register(updated)  # refreshes tier; sku_code stays stable
+
+    if _store is not None:
+        _store.save_agent(updated)
+        if _scheduler.suite.history:
+            _store.add_verification(agent_id, _scheduler.suite.history[-1])
+    _persist_agent_sku(agent_id)
 
     _json_response(handler, 200, {
         "agent_id": agent_id,
@@ -318,6 +373,16 @@ def _handle_merge_agents(handler: "AgentRegistryHandler", params: dict, qs: dict
             _registry[sid] = src
             _sku_registry.deactivate(sid, superseded_by_sku=merged_sku_str)
 
+    if _store is not None:
+        _store.save_agent(merged_card)
+        for sid in source_ids:
+            _store.save_agent(_registry[sid])
+            _persist_agent_sku(sid)
+    _persist_agent_sku(new_id)
+    if _obsolescence is not None:
+        for sid in source_ids:
+            _obsolescence.flag(sid, reason="MERGED", superseded_by=new_id)
+
     _json_response(handler, 201, {
         "merged_id": new_id,
         "source_ids": source_ids,
@@ -336,11 +401,14 @@ def _handle_list_skus(handler: "AgentRegistryHandler", params: dict, qs: dict) -
 
 def _handle_get_sku(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
     sku_code = params["sku_code"]
-    sku = _sku_registry.get_by_sku(sku_code)
+    sku, resolved_from = _sku_registry.resolve(sku_code)
     if sku is None:
         _error(handler, 404, f"SKU '{sku_code}' not found")
         return
-    _json_response(handler, 200, sku.to_dict())
+    payload = sku.to_dict()
+    if resolved_from:
+        payload["resolved_from"] = resolved_from
+    _json_response(handler, 200, payload)
 
 
 def _handle_get_sku_agent(handler: "AgentRegistryHandler", params: dict, qs: dict) -> None:
@@ -376,6 +444,7 @@ def _handle_sku_sync(handler: "AgentRegistryHandler", params: dict, qs: dict) ->
     count = 0
     for card in cards:
         _sku_registry.register(card)
+        _persist_agent_sku(card.agent_id)
         count += 1
     _json_response(handler, 200, {
         "status": "synced",
@@ -391,6 +460,7 @@ def _handle_deactivate_sku(handler: "AgentRegistryHandler", params: dict, qs: di
         _error(handler, 404, f"SKU '{sku_code}' not found")
         return
     _sku_registry.deactivate(sku.agent_id)
+    _persist_agent_sku(sku.agent_id)
     updated = _sku_registry.get_by_sku(sku_code)
     _json_response(handler, 200, updated.to_dict() if updated else {"deactivated": sku_code})
 
@@ -485,7 +555,7 @@ class AgentRegistryHandler(BaseHTTPRequestHandler):
 # Server entry point
 # ---------------------------------------------------------------------------
 
-def run_server(port: int = 8080, host: str = "0.0.0.0") -> None:
+def run_server(port: int = 8080, host: str = "0.0.0.0", db_path: str | None = None) -> None:
     """Initialise state and start a threaded HTTP server on *host*:*port*."""
     import logging
     logging.basicConfig(
@@ -494,11 +564,12 @@ def run_server(port: int = 8080, host: str = "0.0.0.0") -> None:
     )
     log = logging.getLogger("api.server")
 
-    _init_state()
+    _init_state(db_path)
 
     server = ThreadingHTTPServer((host, port), AgentRegistryHandler)
     log.info("Agent Registry API listening on http://%s:%d", host, port)
-    log.info("Loaded %d example agents: %s", len(_registry), list(_registry.keys()))
+    log.info("DB: %s — loaded %d agents: %s",
+             _store.path if _store else "?", len(_registry), list(_registry.keys()))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -2,8 +2,13 @@
 SKU (Stock Keeping Unit) system for AI agents.
 Each agent in the registry gets a deterministic, human-readable SKU.
 
-SKU format: {CATEGORY}-{SUBCATEGORY}-{TRUST_TIER}-{SHORT_HASH}
-Example: CODE-REVIEW-VRF-4a2f
+SKU format: {CATEGORY}-{SUBCATEGORY}-{SHORT_HASH}
+Example: CODE-REVIEW-4a2f
+
+The trust tier is a mutable attribute of the SKU, NOT part of the code —
+codes stay stable across re-verification so external references never break.
+Legacy 4-part codes ({CAT}-{SUB}-{TIER}-{HASH}) are kept as aliases and
+resolve to the current code.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -150,7 +155,7 @@ def generate_sku(agent_card) -> "AgentSKU":
     tier = _detect_tier(agent_card)
     sh = _short_hash(agent_card.agent_id)
 
-    sku_code = f"{category.value}-{subcategory}-{tier.value}-{sh}"
+    sku_code = f"{category.value}-{subcategory}-{sh}"
 
     # Tags: union of input_types + output_types, category, tier
     tags_set: set[str] = set()
@@ -193,11 +198,15 @@ class SKURegistry:
     Syncs with the main agent registry.
     """
     def __init__(self):
-        self._skus: dict[str, AgentSKU] = {}   # sku_code -> AgentSKU
+        self._skus: dict[str, AgentSKU] = {}    # sku_code -> AgentSKU
         self._by_agent: dict[str, str] = {}     # agent_id -> sku_code
+        self._aliases: dict[str, str] = {}      # old sku_code -> current sku_code
 
     def register(self, agent_card) -> AgentSKU:
-        """Generate and store SKU for agent. If agent already has SKU, update it."""
+        """Generate and store SKU for agent. If agent already has SKU, update it
+        in place — the code only changes if category/subcategory changed (or the
+        old entry used the legacy tier-in-code format), in which case the old
+        code is kept as an alias."""
         new_sku = generate_sku(agent_card)
 
         existing_sku_code = self._by_agent.get(agent_card.agent_id)
@@ -207,13 +216,38 @@ class SKURegistry:
                 # Preserve original listed_at; update fields
                 new_sku.listed_at = existing.listed_at
                 new_sku.last_updated = datetime.now(timezone.utc)
-                # If sku_code changed (e.g. tier changed), remove old entry
                 if existing_sku_code != new_sku.sku_code:
+                    # Keep the old code resolvable forever
                     del self._skus[existing_sku_code]
+                    self._aliases[existing_sku_code] = new_sku.sku_code
+                    # Re-point any aliases that targeted the old code
+                    for alias, target in self._aliases.items():
+                        if target == existing_sku_code:
+                            self._aliases[alias] = new_sku.sku_code
 
         self._skus[new_sku.sku_code] = new_sku
         self._by_agent[agent_card.agent_id] = new_sku.sku_code
         return new_sku
+
+    def load_state(self, skus: list[AgentSKU], aliases: dict[str, str]) -> None:
+        """Hydrate the registry from persisted state (replaces current content)."""
+        self._skus = {s.sku_code: s for s in skus}
+        self._by_agent = {s.agent_id: s.sku_code for s in skus}
+        self._aliases = dict(aliases)
+
+    def aliases(self) -> dict[str, str]:
+        return dict(self._aliases)
+
+    def resolve(self, sku_code: str) -> tuple[Optional[AgentSKU], Optional[str]]:
+        """Look up a SKU by code, following aliases. Returns (sku, resolved_from)
+        where resolved_from is the requested code if it was an alias, else None."""
+        sku = self._skus.get(sku_code)
+        if sku is not None:
+            return sku, None
+        target = self._aliases.get(sku_code)
+        if target is not None:
+            return self._skus.get(target), sku_code
+        return None, None
 
     def deactivate(self, agent_id: str, superseded_by_sku: Optional[str] = None) -> None:
         """Mark SKU as inactive when agent is removed."""
@@ -227,7 +261,8 @@ class SKURegistry:
             sku.last_updated = datetime.now(timezone.utc)
 
     def get_by_sku(self, sku_code: str) -> Optional[AgentSKU]:
-        return self._skus.get(sku_code)
+        sku, _ = self.resolve(sku_code)
+        return sku
 
     def get_by_agent(self, agent_id: str) -> Optional[AgentSKU]:
         sku_code = self._by_agent.get(agent_id)
