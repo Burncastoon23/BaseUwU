@@ -9,7 +9,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-class ApiClient(var baseUrl: String = "http://10.0.2.2:8080") {
+class ApiClient(
+    var baseUrl: String = com.agentregistry.android.BuildConfig.DEFAULT_BASE_URL,
+    var apiKey: String = "",
+) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -78,8 +81,11 @@ class ApiClient(var baseUrl: String = "http://10.0.2.2:8080") {
         runCatching { get("/sku/catalog") }
     }
 
+    private fun Request.Builder.withAuth(): Request.Builder =
+        if (apiKey.isNotBlank()) header("X-API-Key", apiKey) else this
+
     private fun get(path: String): String {
-        val request = Request.Builder().url("$baseUrl$path").get().build()
+        val request = Request.Builder().url("$baseUrl$path").get().withAuth().build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw Exception("HTTP ${response.code}: ${response.message}")
             return response.body?.string() ?: throw Exception("Empty response body")
@@ -88,7 +94,7 @@ class ApiClient(var baseUrl: String = "http://10.0.2.2:8080") {
 
     private fun post(path: String, body: String = "{}"): String {
         val requestBody = body.toRequestBody(jsonMediaType)
-        val request = Request.Builder().url("$baseUrl$path").post(requestBody).build()
+        val request = Request.Builder().url("$baseUrl$path").post(requestBody).withAuth().build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw Exception("HTTP ${response.code}: ${response.message}")
             return response.body?.string() ?: ""

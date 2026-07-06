@@ -30,8 +30,10 @@ class AgentDetailActivity : AppCompatActivity() {
 
         // Try to get stored server URL from shared preferences or use default
         val prefs = getSharedPreferences("agent_registry", MODE_PRIVATE)
-        val serverUrl = prefs.getString("server_url", "http://10.0.2.2:8080") ?: "http://10.0.2.2:8080"
-        apiClient = ApiClient(serverUrl)
+        val serverUrl = prefs.getString("server_url", BuildConfig.DEFAULT_BASE_URL)
+            ?: BuildConfig.DEFAULT_BASE_URL
+        val apiKey = prefs.getString("api_key", "") ?: ""
+        apiClient = ApiClient(serverUrl, apiKey)
 
         binding.recyclerViewCapabilities.layoutManager = LinearLayoutManager(this)
 

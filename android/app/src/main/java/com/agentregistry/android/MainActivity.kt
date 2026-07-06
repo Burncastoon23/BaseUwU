@@ -37,6 +37,12 @@ class MainActivity : AppCompatActivity() {
 
         viewModel = ViewModelProvider(this)[RegistryViewModel::class.java]
 
+        // Restore server config saved from the Settings dialog
+        val prefs = getSharedPreferences("agent_registry", MODE_PRIVATE)
+        val savedUrl = prefs.getString("server_url", null)
+        val savedKey = prefs.getString("api_key", "") ?: ""
+        if (savedUrl != null) viewModel.setServerConfig(savedUrl, savedKey)
+
         adapter = SkuAdapter { sku ->
             val intent = Intent(this, AgentDetailActivity::class.java)
             intent.putExtra("SKU_CODE", sku.skuCode)
@@ -140,14 +146,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showServerUrlDialog() {
-        val input = EditText(this)
-        input.setText(viewModel.state.value.serverUrl)
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 16, 48, 0)
+        }
+        val urlInput = EditText(this).apply {
+            hint = "Server URL"
+            setText(viewModel.state.value.serverUrl)
+        }
+        val keyInput = EditText(this).apply {
+            hint = "API key (optional)"
+            setText(viewModel.state.value.apiKey)
+        }
+        container.addView(urlInput)
+        container.addView(keyInput)
         AlertDialog.Builder(this)
-            .setTitle("Server URL")
-            .setView(input)
+            .setTitle("Server settings")
+            .setView(container)
             .setPositiveButton("OK") { _, _ ->
-                val url = input.text.toString().trimEnd('/')
-                if (url.isNotBlank()) viewModel.setServerUrl(url)
+                val url = urlInput.text.toString().trimEnd('/')
+                val key = keyInput.text.toString().trim()
+                if (url.isNotBlank()) {
+                    getSharedPreferences("agent_registry", MODE_PRIVATE).edit()
+                        .putString("server_url", url)
+                        .putString("api_key", key)
+                        .apply()
+                    viewModel.setServerConfig(url, key)
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()

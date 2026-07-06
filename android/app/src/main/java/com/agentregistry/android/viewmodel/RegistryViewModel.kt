@@ -11,7 +11,8 @@ data class RegistryUiState(
     val skus: List<AgentSku> = emptyList(),
     val isLoading: Boolean = false,
     val error: String? = null,
-    val serverUrl: String = "http://10.0.2.2:8080",
+    val serverUrl: String = com.agentregistry.android.BuildConfig.DEFAULT_BASE_URL,
+    val apiKey: String = "",
     val agentCount: Int = 0,
     val staleCount: Int = 0,
     val searchQuery: String = "",
@@ -44,9 +45,9 @@ class RegistryViewModel : ViewModel() {
         }
     }
 
-    fun setServerUrl(url: String) {
-        apiClient = ApiClient(url)
-        _state.update { it.copy(serverUrl = url) }
+    fun setServerConfig(url: String, apiKey: String = _state.value.apiKey) {
+        apiClient = ApiClient(url, apiKey)
+        _state.update { it.copy(serverUrl = url, apiKey = apiKey) }
         loadSkus()
     }
 

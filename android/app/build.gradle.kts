@@ -1,6 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Release signing: create android/keystore.properties (never committed) with
+//   storeFile=/path/to/release.jks
+//   storePassword=...
+//   keyAlias=...
+//   keyPassword=...
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -15,8 +27,34 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        if (keystoreProps.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField("String", "DEFAULT_BASE_URL", "\"http://10.0.2.2:8080\"")
+        }
+        release {
+            buildConfigField("String", "DEFAULT_BASE_URL", "\"https://registry.example.com\"")
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystoreProps.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     compileOptions {

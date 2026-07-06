@@ -12,6 +12,9 @@
     <!-- SKU code color -->
     <color name="color_sku_code">#6200EE</color>
 
+    <!-- Launcher icon -->
+    <color name="ic_launcher_background">#1976D2</color>
+
     <!-- Theme support colors -->
     <color name="color_primary_container">#BBDEFB</color>
     <color name="color_on_primary_container">#0D47A1</color>
